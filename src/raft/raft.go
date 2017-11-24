@@ -19,11 +19,13 @@ package raft
 
 import "sync"
 import "labrpc"
+import "time"
 
 // import "bytes"
 // import "encoding/gob"
 
-
+const RTT int = 20   // estimate RTT between nodes, in milliseconds
+const factor int = 4 // election timeout distribute uniformly in [RTT*factor, RTT*(factor+1)]
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -35,6 +37,20 @@ type ApplyMsg struct {
 	Command     interface{}
 	UseSnapshot bool   // ignore for lab2; only used in lab3
 	Snapshot    []byte // ignore for lab2; only used in lab3
+}
+
+type Entry struct {
+	Op    string
+	Term  int
+	Index int
+}
+type AppendEntries struct {
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []Entry
+	LeaderIndex  int
 }
 
 //
@@ -50,6 +66,11 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	electionTimeout  int // election timeout describe in raft paper
+	heartbeatTimeout int // time interval between heartbeat are sent, need to be smaller than election timeout
+
+	currentTerm   int
+	currentLeader int // idnex in peers of current Leader, -1 if not knowing or not existing
 }
 
 // return currentTerm and whether this server
@@ -59,6 +80,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = (rf.currentLeader == rf.me)
 	return term, isleader
 }
 
@@ -93,15 +116,16 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -110,6 +134,7 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	VoteGranted bool
 }
 
 //
@@ -153,7 +178,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -174,7 +198,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 
-
 	return index, term, isLeader
 }
 
@@ -186,6 +209,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+}
+
+func (rf *Raft) SendHeartbeat() {
+
+}
+func (rf *Raft) PeriodicalCheck() {
+	for {
+		_, isLeader := rf.GetState()
+		if isLeader {
+			time.Sleep(rf.heartbeatTimeout)
+			rf.SendHeartbeat()
+		} else {
+			select {}
+		}
+	}
 }
 
 //
@@ -207,10 +245,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	go rf.PeriodicalCheck()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
